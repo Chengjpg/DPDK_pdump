@@ -16,6 +16,8 @@ struct conftext {
 };
 struct conftext conf;
 int pcapnum=0;
+struct rte_mempool *mp_mbuf;
+struct rte_ring *pdump_ring ;
 //uint64_t tsc_hz ;
 
 //write to pcap file
@@ -73,7 +75,8 @@ void Show_Port_Info(void){
 
 #define RTE_MEMPOOL_CACHE_SIZE 256
 #define NUM_MBUFS 8192
-#define MBUF_POOL_NAME "pdump_pool"
+#define MBUF_POOL_NAME "pdump_pool_new"
+#define RING_NAME "pdump_ring"
 
 
 
@@ -82,13 +85,23 @@ static void signal_handler(int signum)
 {
     if (signum == SIGINT || signum == SIGTERM) {
         //end file
-        pcap_dump_close(conf.dumper);
-        // stop pdump  
+        cap_dump_close(conf.dumper);
+        conf.dumper = NULL; 
         rte_pdump_disable(conf.port_id, conf.queue_id,RTE_PDUMP_FLAG_RX);
+        //free 
+        if (pdump_ring) {
+            rte_ring_free(pdump_ring);
+        }
+        if (mp_mbuf) {
+            rte_mempool_free(mp_mbuf);
+        }
+        // stop pdump  
         printf("PDUMP disabled. %d packets capture finished.\n",pcapnum);
     }
     exit(signum); 
 }
+ 
+
 
 
 int main(int argc, char *argv[]) {
@@ -175,7 +188,6 @@ int main(int argc, char *argv[]) {
         rte_exit(EXIT_FAILURE, "Cannot initialize pdump\n");
 
     // Mempool Lookup
-    struct rte_mempool *mp_mbuf;
     mp_mbuf = rte_mempool_lookup(MBUF_POOL_NAME);
     if( mp_mbuf == NULL){
         // Mempool Create
@@ -183,14 +195,23 @@ int main(int argc, char *argv[]) {
                     NUM_MBUFS, RTE_MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
                     rte_socket_id());
         if (mp_mbuf == NULL)
-            rte_panic("Cannot create mbuf pool\n");
+            rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
+
     }
-    printf("Successfully get the pdump mbuf pool '%s'\n", MBUF_POOL_NAME); 
+    //printf("Successfully get the pdump mbuf pool '%s'\n", MBUF_POOL_NAME); 
     
     // Ring Lookup
-    struct rte_ring *pdump_ring = rte_ring_lookup("Pdump_Ring");
-    if (pdump_ring == NULL)
-        rte_panic("Failed to find ring\n");
+    pdump_ring = rte_ring_lookup(RING_NAME);
+    if (pdump_ring == NULL){
+        // Ring Create
+        pdump_ring = rte_ring_create(RING_NAME,
+                                    8192,
+                                    rte_socket_id(),
+                                    0);
+        if (pdump_ring == NULL) {
+            rte_exit(EXIT_FAILURE, "Failed to create ring\n");
+        }
+    }
 
     // Start pdump
     ret = rte_pdump_enable(conf.port_id, conf.queue_id,RTE_PDUMP_FLAG_RX,pdump_ring,mp_mbuf,NULL);
@@ -268,7 +289,13 @@ int main(int argc, char *argv[]) {
     conf.dumper = NULL; 
     // stop pdump  
     rte_pdump_disable(conf.port_id, conf.queue_id,RTE_PDUMP_FLAG_RX);
-    
+    //free 
+    if (pdump_ring) {
+        rte_ring_free(pdump_ring);
+    }
+    if (mp_mbuf) {
+        rte_mempool_free(mp_mbuf);
+    }
     //rte_ring_reset(pdump_ring);
     //rte_mempool_reset(mp_mbuf);
     printf("PDUMP disabled. %d packets capture finished.\n",pcapnum);
