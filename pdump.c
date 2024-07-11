@@ -1,3 +1,4 @@
+//gcc -o pdump_capture pdump.c -pthread  `pkg-config --cflags --libs libdpdk libpcap`
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -85,7 +86,7 @@ static void signal_handler(int signum)
 {
     if (signum == SIGINT || signum == SIGTERM) {
         //end file
-        cap_dump_close(conf.dumper);
+        pcap_dump_close(conf.dumper);
         conf.dumper = NULL; 
         rte_pdump_disable(conf.port_id, conf.queue_id,RTE_PDUMP_FLAG_RX);
         //free 
@@ -247,8 +248,23 @@ int main(int argc, char *argv[]) {
 
     //filter
         struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
-        if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4)) {
-            struct rte_ipv4_hdr *ipv4_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+        uint16_t ip_type;
+        struct rte_ipv4_hdr *ipv4_hdr;
+        // Check for VLAN tag
+        if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_VLAN) || eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_QINQ)){
+            struct rte_vlan_hdr *vlan_hdr = (struct rte_vlan_hdr *)(eth_hdr + 1);
+            ipv4_hdr = (struct rte_ipv4_hdr *)(vlan_hdr + 1);
+            ip_type = rte_be_to_cpu_16(vlan_hdr->eth_proto);
+        }
+        else{
+            ipv4_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+            ip_type =  rte_be_to_cpu_16(eth_hdr->ether_type) ;
+        }
+
+
+
+        if (ip_type == RTE_ETHER_TYPE_IPV4) {
+
             if(filter_ip){
                 if ((ntohl(ipv4_hdr->dst_addr) != rte_cpu_to_be_32(inet_addr(filter_ip))) && 
                     (ntohl(ipv4_hdr->src_addr) != rte_cpu_to_be_32(inet_addr(filter_ip)))) {
